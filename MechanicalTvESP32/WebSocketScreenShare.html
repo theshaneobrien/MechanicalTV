@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<script>
+		var socket = null;
+		var ctx = null;
+		var canvas = null;
+		var ctx2 = null;
+		var canvas2 = null;
+		var video = null;
+		
+		var frameCounter = 0;
+		var deltaError = null;
+		var deltaPixels = null;
+		var gamma = 1;
+		var fps = 10;
+		
+		async function sendCanvas8Bit(ctx, xres, yres)
+		{
+			let imgData = ctx.getImageData(0, 0, xres, yres);		
+			let pixels = imgData.data;
+			//socket.send(Uint8Array.of(0x00));
+			var buff = new Uint8Array(xres * yres / 2);
+			let i = 0;
+			for(var y = 0; y < yres; y++)
+			{
+				for(var x = 0; x < xres; x += 2)
+				{
+					var a = (x + (y * xres)) * 4;
+					var c = (pixels[a] >> 4) + ((pixels[a + 4] >> 4) << 4);
+					buff[i++] = c;
+				}
+			}
+			socket.send(buff);
+		}
+
+		async function convertCanvasGreyscale(ctx, ctx2, xres, yres, gamma)
+		{
+			var imgData = ctx.getImageData(0, 0, xres, yres);
+			var pixels = imgData.data;
+			for(var y = 0; y < yres; y++)
+			{
+				for(var x = 0; x < xres; x++)
+				{
+					var a = (x + (y * xres)) * 4;
+					var c = Math.round(Math.pow((
+						pixels[a + 2] * 0.2989 + 
+						pixels[a + 1] * 0.5870 + 
+						pixels[a] * 0.1140) / 255, gamma) * 255);
+					pixels[a + 0] = c;
+					pixels[a + 1] = c;
+					pixels[a + 2] = c;
+				}
+			}
+			ctx2.putImageData(imgData, 0, 0);
+		}
+
+		function convertFile(event)
+		{
+			var reader = new FileReader();
+			var file = event.target.files[0];
+			reader.onload = function()
+			{
+				var img = document.createElement("img");
+				img.onload = function()
+				{
+					canvas = document.querySelector('canvas');
+					ctx = canvas.getContext('2d');
+					ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+					convertCanvas(ctx, canvas.width, canvas.height);
+				}
+				img.src = reader.result;
+			}
+			if(file)
+				reader.readAsDataURL(file);
+		}
+		
+		function connect()
+		{
+			var server = document.getElementById("server").value;
+			socket = new WebSocket(server);
+			//socket.send("bitluni");
+			socket.onopen = function () {
+			};
+		}
+		
+		function send(val)
+		{
+			if (socket && socket.readyState == 1 && socket.bufferedAmount == 0)
+				  socket.send(val);
+		}
+		
+		var displayMediaOptions = 
+		{
+		  video: {
+			cursor: "always"
+		  },
+		  audio: false
+		};
+
+		function changeGamma(g)
+		{
+			gamma = g * 0.01;
+			document.querySelector("#gammaval").value = gamma.toFixed(2);
+			convertCanvasGreyscale(ctx, ctx2, canvas.width, canvas.height, gamma);
+		}
+		
+		function changeFps(f)
+		{
+			fps = f * 0.1;
+			document.querySelector("#fpsval").value = fps.toFixed(1);
+			var buff = new Uint8Array(1);
+			buff[0] = f;
+			send(buff);
+		}
+		
+		let lastFrameTime = 0;
+		const minMillisPerFrame = 25;
+		function videoCB()
+		{
+			let t = Date.now();
+			ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+			if(socket.bufferedAmount === 0 && (t - lastFrameTime) >= minMillisPerFrame)
+			{
+				lastFrameTime = t;
+				convertCanvasGreyscale(ctx, ctx2, canvas.width, canvas.height, gamma);
+				sendCanvas8Bit(ctx2, canvas.width, canvas.height);
+			}
+			video.requestVideoFrameCallback(videoCB);
+		}
+		
+		async function startCapture() 
+		{
+			try 
+			{
+				canvas = document.querySelector('#c0');
+				ctx = canvas.getContext('2d', { willReadFrequently: true });			
+				canvas2 = document.querySelector('#c1');
+				ctx2 = canvas2.getContext('2d', { willReadFrequently: true });			
+				video = document.querySelector('video');
+				video.srcObject = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+				video.requestVideoFrameCallback(videoCB);
+			} catch(err) {
+				console.error("Error: " + err);
+			}
+		}
+
+	</script>
+</head>
+
+<body style="font-family: arial; background-color: black; color:blue">
+	<h1><a href="https://youtube.com/bitlunislab">bitluni's</a> WebSocket Screen Share</h1>
+	server: <input id="server" type="text" value="ws://192.168.178.100:81"><button onclick="connect();">connect</button><br>
+	<button onclick="startCapture();">screen share</button><br>
+	fps<input type="range" min="10" max="250" value="100" id="fps" oninput="changeFps(this.value)">
+	<input id="fpsval" readonly value="10.0" style="width: 40px"><br>
+	gamma<input type="range" min="50" max="400" value="100" id="gamma" oninput="changeGamma(this.value)">
+	<input id="gammaval" readonly value="1.00" style="width: 40px"><br>
+	<video autoplay hidden></video>
+	<canvas id="c0" width="32px" height="25px" style="zoom: 4"></canvas>
+	<canvas id="c1" width="32px" height="25px" style="zoom: 4"></canvas><br>
+	<div id="out"></div>
+</body>
+</html>
